@@ -121,7 +121,15 @@ phase_deploy() {
 
     chown -R www-data:www-data /opt/unetlab/data /opt/unetlab/labs
     chown root:www-data /opt/unetlab/tmp; chmod 2775 /opt/unetlab/tmp
-    ok "web UI deployed to /opt/unetlab/html"
+
+    # Version sync (mirrors build_deb_eve-ng.sh): the UI hard-reloads forever if
+    # themes/adminLTE/VERSION != $rootScope.EVE_VERSION in app.js. Force both from
+    # the canonical root VERSION so a raw-git deploy can never desync them.
+    local ver; ver="$(cat "$SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')" || ver="0.0.0-0"
+    printf '%s' "$ver" > /opt/unetlab/html/themes/adminLTE/VERSION
+    sed -i "s/EVE_VERSION = \".*/EVE_VERSION = \"${ver}\";/" \
+        /opt/unetlab/html/themes/adminLTE/unl_data/js/angularjs/app.js 2>/dev/null || true
+    ok "web UI deployed to /opt/unetlab/html (version ${ver} synced)"
 
     # QEMU shim: EVE code calls /opt/qemu/bin/* — point it at distro QEMU.
     mkdir -p /opt/qemu/bin /opt/qemu/share/qemu
