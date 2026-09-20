@@ -1,0 +1,10 @@
+[Unit]
+Description=EVE-NG Resolute web-console token janitor timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

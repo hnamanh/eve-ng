@@ -1,0 +1,12 @@
+[Unit]
+Description=EVE-NG Resolute web-console token janitor (reap stale console tokens)
+ConditionPathExists=/dev/shm/eve-tokens
+
+[Service]
+Type=oneshot
+# Tokens are short-lived (TOKEN_TTL ~60s); reap any older than 2 minutes so a
+# leaked/unused token can never linger as a usable console grant.
+ExecStart=/usr/bin/find /dev/shm/eve-tokens -type f -mmin +2 -delete
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true

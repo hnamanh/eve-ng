@@ -86,52 +86,66 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 			return $output;
 		}
 		if ( $p['html5'] == 1 ) {
-		//enable on databse
-			$query = "update users set html5 = 1 where username = '".$username."' ;";
-			$statement = $db -> prepare($query);
-			$statement -> execute();
-			// Guacamole 1.x: username lives in guacamole_entity; user row references it by entity_id
-			$query = "delete from guacamole_user where entity_id = (select entity_id from guacamole_entity where type='USER' and name = '".$username."')";
-			$statement = $html5_db -> prepare($query);
-			$statement -> execute();
-	
-			$query = "select id from pods where username = '".$username."';";
-			$statement = $db -> prepare($query);
-			$statement -> execute();
-			$result = $statement -> fetch();
-			$pod = $result["id"];
-	
-			
-			// Guacamole >= 1.0 verifies: SHA256(password + HEX(salt)) == password_hash
-			$salt = random_bytes(32);
-			$hash = hash('sha256', 'unl' . strtoupper(bin2hex($salt)), true);
+			//enable on databse
+				$query = "update users set html5 = 1 where username = '".$username."' ;";
+				$statement = $db -> prepare($query);
+				$statement -> execute();
 
-			// Guacamole 1.x schema: username lives in guacamole_entity; the user row
-			// references it by entity_id. Keep EVE's pod+1000 id convention as entity_id.
-			$query = "replace into guacamole_entity (entity_id, name, type) values (?, ?, 'USER')";
-			$statement = $html5_db -> prepare($query);
-			$statement -> execute(array($pod+1000, $username));
+				// Guacamole DB rows are optional: the Resolute web console is stateless
+				// (token_mint.php mints per-connection tokens from EVE's own session),
+				// so a missing guacdb must never break login.
+				if ($html5_db !== False) {
+					// Guacamole 1.x: username lives in guacamole_entity; user row references it by entity_id
+					$query = "delete from guacamole_user where entity_id = (select entity_id from guacamole_entity where type='USER' and name = '".$username."')";
+					$statement = $html5_db -> prepare($query);
+					$statement -> execute();
 
-			$query = "replace into guacamole_user(user_id,entity_id,password_salt,password_hash,password_date) values (?,?,?,?,NOW())";
-			$statement = $html5_db -> prepare($query);
-			$statement -> execute(array($pod+1000, $pod+1000, $salt, $hash));
-
-			$query="replace into guacamole_user_permission ( entity_id , affected_user_id , permission ) values ( ? , ? , 'UPDATE' )";
-			$statement = $html5_db -> prepare($query);
-			$statement -> execute(array($pod+1000, $pod+1000));
-	
-			$rc = updateUserToken($db,$username,$pod);
-		} else { 
-			$query = "update users set html5 = 0 where username = '".$username."' ;";
-	                $statement = $db -> prepare($query);
-	                $statement -> execute();
-
-                        $query = "delete from guacamole_user where entity_id = (select entity_id from guacamole_entity where type='USER' and name = '".$username."')";
-                        $statement = $html5_db -> prepare($query);
-                        $statement -> execute();
+					$query = "select id from pods where username = '".$username."';";
+					$statement = $db -> prepare($query);
+					$statement -> execute();
+					$result = $statement -> fetch();
+					$pod = $result["id"];
 
 
-		};
+					// Guacamole >= 1.0 verifies: SHA256(password + HEX(salt)) == password_hash
+					$salt = random_bytes(32);
+					$hash = hash('sha256', 'unl' . strtoupper(bin2hex($salt)), true);
+
+					// Guacamole 1.x schema: username lives in guacamole_entity; the user row
+					// references it by entity_id. Keep EVE's pod+1000 id convention as entity_id.
+					$query = "replace into guacamole_entity (entity_id, name, type) values (?, ?, 'USER')";
+					$statement = $html5_db -> prepare($query);
+					$statement -> execute(array($pod+1000, $username));
+
+					$query = "replace into guacamole_user(user_id,entity_id,password_salt,password_hash,password_date) values (?,?,?,?,NOW())";
+					$statement = $html5_db -> prepare($query);
+					$statement -> execute(array($pod+1000, $pod+1000, $salt, $hash));
+
+					$query="replace into guacamole_user_permission ( entity_id , affected_user_id , permission ) values ( ? , ? , 'UPDATE' )";
+					$statement = $html5_db -> prepare($query);
+					$statement -> execute(array($pod+1000, $pod+1000));
+				} else {
+					// Still need the pod id for updateUserToken below.
+					$query = "select id from pods where username = '".$username."';";
+					$statement = $db -> prepare($query);
+					$statement -> execute();
+					$result = $statement -> fetch();
+					$pod = $result["id"];
+				}
+
+				$rc = updateUserToken($db,$username,$pod);
+			} else { 
+				$query = "update users set html5 = 0 where username = '".$username."' ;";
+                $statement = $db -> prepare($query);
+                $statement -> execute();
+
+                if ($html5_db !== False) {
+					$query = "delete from guacamole_user where entity_id = (select entity_id from guacamole_entity where type='USER' and name = '".$username."')";
+                    $statement = $html5_db -> prepare($query);
+                    $statement -> execute();
+                }
+
+			};
 
 		$output['code'] = 200;
 		$output['status'] = 'success';

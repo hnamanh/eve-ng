@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EVE Console</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:#1e2430; color:#dfe6f0;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow:hidden; }
+  #bar { display:flex; align-items:center; gap:8px; padding:6px 10px; background:#141922;
+    border-bottom:1px solid #2a3345; font-size:13px; user-select:none; }
+  #bar .title { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #bar button { background:#26304a; color:#dfe6f0; border:1px solid #3a4763; border-radius:4px;
+    padding:3px 10px; font-size:12px; cursor:pointer; }
+  #bar button:hover { background:#31405f; }
+  #status { font-size:12px; color:#8fa1c0; min-width:90px; text-align:right; }
+  #pane { position:absolute; top:37px; left:0; right:0; bottom:0; background:#000; }
+  .vnc-host, .rdp-screen { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+  .term-wrap { position:absolute; inset:0; padding:4px; }
+  #err { white-space:pre-wrap; color:#ff9c9c; font-size:13px; padding:20px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span class="title" id="title">EVE Console</span>
+  <button id="btn-cad" title="Send Ctrl+Alt+Del" style="display:none">Ctrl+Alt+Del</button>
+  <button id="btn-reconnect" title="Reconnect console">&#x21BB; Reconnect</button>
+  <span id="status">connecting…</span>
+</div>
+<div id="pane"></div>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="vendor/guacamole/guacamole-common.min.js"></script>
+<script type="module" src="console.js"></script>
+</body>
+</html>

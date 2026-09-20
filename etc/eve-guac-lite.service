@@ -1,0 +1,25 @@
+[Unit]
+Description=EVE-NG Resolute guacamole-lite (browser RDP via guacd, no Tomcat)
+After=network.target guacd.service
+Wants=guacd.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/unetlab/html/console/backend
+Environment=GUAC_WS_HOST=127.0.0.1
+Environment=GUAC_WS_PORT=8081
+Environment=GUACD_HOST=127.0.0.1
+Environment=GUACD_PORT=4822
+# MUST equal GUAC_CRYPT_KEY in /etc/eve-webconsole/console_config.php (32 bytes).
+# EnvironmentFile carries the secret with 0600 perms instead of inlining it here.
+EnvironmentFile=/etc/eve-webconsole/guac.env
+ExecStart=/usr/bin/node /opt/unetlab/html/console/backend/guacamole-lite-server.js
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

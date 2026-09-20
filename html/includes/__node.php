@@ -1134,7 +1134,6 @@ class Node {
 		if ($this -> type == 'docker') {
                         return 'docker://'.$_SERVER['SERVER_NAME'].':4243/'.$this -> lab_id.'-'.$this -> tenant.'-'.$this -> id.'?'.$this -> name;
                 }
-		$html5_db = html5_checkDatabase();
 		if ( $html5 != 1 ) {
 			switch ( $this -> console ) {
 				default:
@@ -1158,14 +1157,11 @@ class Node {
 			} else {
 				$console=$this->console ;
 			}
-			//$html5_db = html5_checkDatabase();
-			html5AddSession( $html5_db, $this -> name.'_'.$this ->id.'_'.$username , $console , $this -> port, $this -> tenant);
-			$html5_db = null ;
-			addHtml5Perm($this->port,$this->tenant);
-			$token=getHtml5Token($this->tenant);
-			$b64id=base64_encode( $this->port."\0".'c'."\0".'mysql' );
-			//return 'http://'.$_SERVER['SERVER_NAME'].':8080/guacamole/#/client/'.$b64id ;
-			return '/html5/#/client/'.$b64id.'?token='.$token ;
+			// Resolute web console (ported from PNETLab): the viewer mints its own
+			// short-lived, session-gated token on demand via /console/token_mint.php,
+			// which re-checks auth + lab ownership server-side. No per-user Guacamole
+			// account or pre-registered connection is needed (stateless design).
+			return '/console/?node='.$this->id.'&type='.urlencode($console).'&name='.urlencode($this->name);
 		}
 	}
 

@@ -78,15 +78,9 @@ if ($db === False) {
 
 $html5_db = html5_checkDatabase();
 if ($html5_db === False) {
-        // Database is not available
-        $app -> map('/api/(:path+)', function() use ($app) {
-                $output['code'] = 500;
-                $output['status'] = 'fail';
-                $output['message'] = $GLOBALS['messages']['90003'];
-                $app -> response -> setStatus($output['code']);
-                $app -> response -> setBody(json_encode($output));
-        }) -> via('DELETE', 'GET', 'POST');
-        $app -> run();
+	// Guacamole DB is optional on Resolute (stateless web console). Log and continue;
+	// apiLogin() skips the guacdb rows when $html5_db is False.
+	error_log(date('M d H:i:s ').'WARN: guacdb unavailable — legacy Guacamole DB auth disabled (web console unaffected)');
 }
 
 

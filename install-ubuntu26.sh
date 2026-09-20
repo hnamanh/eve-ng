@@ -11,19 +11,22 @@
 #
 #  What it does, end to end:
 #    0. Checks host (root, amd64, ubuntu 26), installs dependencies from the
-#       distro repos (PHP 8.x, Apache 2.4, MariaDB, QEMU 10, OVMF, Open vSwitch).
+#       distro repos (PHP 8.x, Apache 2.4, MariaDB, QEMU 10, OVMF, Open vSwitch,
+#       Node.js for the RDP bridge).
 #    1. Clones your fork into /usr/src/eve-ng-public-dev and deploys the web UI
 #       to /opt/unetlab/html with the standard layout + permissions.
 #    2. Compiles the C wrappers (iol/qemu/dynamips) from source on this host.
-#    3. Builds guacd from source (no distro package) and deploys Guacamole 1.x
-#       on a standalone Tomcat 9 (distro Tomcat 10 is Jakarta-only), including
-#       the MySQL JDBC auth provider as a proper $GUACAMOLE_HOME extension.
-#    4. Creates the databases: eve_ng_db + guacdb with the OFFICIAL Guacamole
-#       1.6.0 schema (the 1.x layout moved usernames to guacamole_entity),
-#       users, and the admin account; sets MariaDB root password to 'eve-ng'.
-#    5. Configures Apache (vhost on :80 with /html5/ proxy + websocket tunnel),
-#       systemd services (guacd, tomcat9) and a non-interactive first-boot
-#       network config so the web UI comes up immediately.
+#    3. Builds guacd from source (no distro package) and deploys the PNETLab-style
+#       web console: Node.js guacamole-lite (RDP via guacd, no Tomcat) + Python
+#       console_mux.py (VNC/telnet WS->TCP relay), both loopback-only and gated by
+#       short-lived tokens minted from EVE's own session cookie. No Guacamole WAR,
+#       no JDBC auth provider, no guacdb.
+#    4. Creates the eve_ng_db database + admin account; sets MariaDB root password
+#       to 'eve-ng'.
+#    5. Configures Apache (vhost on :80 with /console/ statics + ws:// proxies for
+#       /vnc/, /telnet/, /guac/), systemd services (guacd, eve-console-mux,
+#       eve-guac-lite, token janitor) and a non-interactive first-boot network
+#       config so the web UI comes up immediately.
 #
 #  Result : EVE-NG at http://<this-host-ip>/   login admin / eve
 # =============================================================================
@@ -36,9 +39,9 @@ SRC_DIR="/usr/src/eve-ng-public-dev"
 LOG="/var/log/eve-install.log"
 JOBS="$(nproc 2>/dev/null || echo 2)"
 
-# Guacamole (no distro package on Ubuntu 26)
+# Guacamole engine (no distro package on Ubuntu 26) — guacd only; the web layer is
+# PNETLab-style (guacamole-lite + console_mux), no Tomcat/WAR/JDBC.
 GUAC_VER="1.6.0"
-TOMCAT9_URL="https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.104/bin/apache-tomcat-9.0.104.tar.gz"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -82,6 +85,11 @@ phase_prereq() {
         libpango1.0-dev libcairo2-dev libjpeg-turbo8-dev libossp-uuid-dev libpng-dev \
         libssh2-1-dev libtelnet-dev libvncserver-dev libvorbis-dev libwebp-dev \
         libpulse-dev libsystemd-dev freerdp3-dev libssl-dev >/dev/null 2>&1 || fail "build deps failed"
+    # Web console bridges: Node.js (guacamole-lite RDP) + Python WS/telnet libs.
+    apt-get install -y -qq nodejs npm python3-pip >/dev/null 2>&1 \
+        || warn "nodejs/python3-pip install reported an error — web console may be limited"
+    pip3 install --break-system-packages websockets telnetlib3 >>"$LOG" 2>&1 \
+        || fail "python web-console deps failed (websockets/telnetlib3)"
     ok "dependencies installed (PHP $(php -r 'echo PHP_VERSION;'), QEMU $(qemu-system-x86_64 --version | head -1 | awk '{print $3}'))"
 
     # Your fork, where the build expects it.
@@ -177,8 +185,8 @@ EOF
 
     # Build guacd from source (no distro package on Ubuntu 26)
     build_guacd
-    # Deploy Guacamole web app + JDBC auth extension on standalone Tomcat 9
-    deploy_guacamole
+    # Deploy the PNETLab-style web console bridges (guacamole-lite + console_mux)
+    deploy_webconsole
 }
 
 # ----------------------------- phase 2: database ----------------------------
@@ -193,43 +201,16 @@ SET PASSWORD FOR 'root'@'localhost' = PASSWORD('eve-ng');
 FLUSH PRIVILEGES;
 SQL
 
-    # EVE database + user
+    # EVE database + user (the web console is stateless — no Guacamole DB needed)
     mysql -u root --password=eve-ng <<'SQL' >>"$LOG" 2>&1 || fail "eve_ng_db setup failed"
 CREATE DATABASE IF NOT EXISTS eve_ng_db CHARACTER SET utf8mb4;
 GRANT ALL ON eve_ng_db.* TO 'eve-ng'@'localhost' IDENTIFIED BY 'eve-ng';
 FLUSH PRIVILEGES;
 SQL
 
-    # Guacamole database + user (VNC/SSH console)
-    mysql -u root --password=eve-ng <<'SQL' >>"$LOG" 2>&1 || fail "guacdb setup failed"
-CREATE DATABASE IF NOT EXISTS guacdb CHARACTER SET utf8mb4;
-GRANT ALL ON guacdb.* TO 'guacuser'@'localhost' IDENTIFIED BY 'eve-ng';
-FLUSH PRIVILEGES;
-SQL
-
     # EVE schema (idempotent)
     mysql -u root --password=eve-ng eve_ng_db < /opt/unetlab/schema/unetlab-001-create-schema.sql >>"$LOG" 2>&1 \
         || warn "unetlab schema load reported an error (may already exist)"
-
-    # Guacamole: fresh DB with the OFFICIAL 1.6.0 schema. The 1.x layout moved
-    # usernames into guacamole_entity and switched permission tables to entity_id,
-    # so the old repo schemas are NOT compatible — use the ones shipped with the
-    # auth-jdbc package (downloaded in phase_deploy).
-    local AJ="/usr/src/guacamole-auth-jdbc-${GUAC_VER}"
-    mysql -u root --password=eve-ng -e "DROP DATABASE IF EXISTS guacdb; CREATE DATABASE guacdb CHARACTER SET utf8mb4;" >>"$LOG" 2>&1 \
-        || fail "guacdb recreate failed"
-    if [[ -f "$AJ/mysql/schema/001-create-schema.sql" ]]; then
-        mysql -u root --password=eve-ng guacdb < "$AJ/mysql/schema/001-create-schema.sql" >>"$LOG" 2>&1 \
-            || fail "guacamole ${GUAC_VER} schema load failed (see $LOG)"
-        [[ -f "$AJ/mysql/schema/002-create-admin-user.sql" ]] && \
-            mysql -u root --password=eve-ng guacdb < "$AJ/mysql/schema/002-create-admin-user.sql" >>"$LOG" 2>&1 || true
-        ok "guacdb created with official Guacamole ${GUAC_VER} schema (admin: guacadmin/guacadmin)"
-    else
-        for f in /opt/unetlab/schema/guacamole-*.sql; do
-            [[ -f "$f" ]] && mysql -u root --password=eve-ng guacdb < "$f" >>"$LOG" 2>&1 \
-                || warn "guacamole schema load reported an error (may already exist)"
-        done
-    fi
 
     # Admin user (password: eve) — only if not present
     local n; n="$(mysql -u root --password=eve-ng -N -e "SELECT COUNT(*) FROM eve_ng_db.users WHERE username='admin';" 2>/dev/null || echo 0)"
@@ -242,19 +223,7 @@ SQL
         ok "admin user already present"
     fi
 
-    # Guacamole JDBC config (read by the web app at startup)
-    mkdir -p /etc/guacamole
-    cat > /etc/guacamole/guacamole.properties <<'EOF'
-mysql-hostname: 127.0.0.1
-mysql-port: 3306
-mysql-database: guacdb
-mysql-username: guacuser
-mysql-password: eve-ng
-mysql-driver-class: com.mysql.cj.jdbc.Driver
-guacd-hostname: 127.0.0.1
-guacd-port: 4822
-EOF
-    ok "databases ready (eve_ng_db + guacdb)"
+    ok "databases ready (eve_ng_db)"
 }
 
 # ----------------------------- phase 3: services ----------------------------
@@ -295,26 +264,26 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
 
-    # Tomcat 9 (Guacamole) service — distro Tomcat 10 is Jakarta-only, so we run
-    # a standalone Tomcat 9 from /opt/tomcat9.
-    local JAVA; JAVA="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
-    cat > /etc/systemd/system/guac-tomcat.service <<EOF
-[Unit]
-Description=Tomcat 9 (Guacamole)
-After=network.target guacd.service
+    # Web console bridges (PNETLab-style, loopback-only):
+    #   eve-console-mux : Python WS->TCP relay for VNC (:6080) + telnet (:8022)
+    #   eve-guac-lite   : Node guacamole-lite WS->guacd for RDP (:8081)
+    #   eve-token-janitor: reaps stale /dev/shm/eve-tokens files (timer-driven)
+    cp "$SRC_DIR/etc/eve-console-mux.service"  /etc/systemd/system/
+    cp "$SRC_DIR/etc/eve-guac-lite.service"    /etc/systemd/system/
+    cp "$SRC_DIR/etc/eve-token-janitor.service" /etc/systemd/system/
+    cp "$SRC_DIR/etc/eve-token-janitor.timer"   /etc/systemd/system/
 
-[Service]
-Type=forking
-User=root
-Environment=JAVA_HOME=${JAVA}
-Environment=CATALINA_PID=/opt/tomcat9/temp/catalina.pid
-ExecStart=/opt/tomcat9/bin/startup.sh
-ExecStop=/opt/tomcat9/bin/shutdown.sh
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    # Per-install 32-byte RDP token key, shared between the PHP minter and the
+    # Node bridge (0600 env file; never inlined into a unit or web-served).
+    local key; key="$(head -c 24 /dev/urandom | base64 | tr -d '\n' | cut -c1-32)"
+    [[ ${#key} -eq 32 ]] || fail "generated GUAC_CRYPT_KEY is not 32 bytes"
+    install -d -m 0755 /etc/eve-webconsole
+    printf 'GUAC_CRYPT_KEY=%s\n' "$key" > /etc/eve-webconsole/guac.env
+    chown root:root /etc/eve-webconsole/guac.env; chmod 0600 /etc/eve-webconsole/guac.env
+    cp "$SRC_DIR/etc/console_config.php" /etc/eve-webconsole/console_config.php
+    sed -i "s|define('GUAC_CRYPT_KEY', '[^']*');|define('GUAC_CRYPT_KEY', '$key');|" \
+        /etc/eve-webconsole/console_config.php
+    chown root:www-data /etc/eve-webconsole/console_config.php; chmod 0640 /etc/eve-webconsole/console_config.php
 
     # cpulimit daemon (EVE feature) — best effort
     if [[ -f "$SRC_DIR/etc/cpulimit.service" ]]; then
@@ -322,10 +291,11 @@ EOF
     fi
 
     systemctl daemon-reload >>"$LOG" 2>&1
-    # Stop distro tomcat if present (port conflict with our Tomcat 9)
+    # Stop distro tomcat if present (port conflict with the guacamole-lite bridge)
     command -v systemctl >/dev/null && systemctl disable --now tomcat10 >/dev/null 2>&1 || true
-    systemctl enable --now guacd guac-tomcat apache2 mariadb >>"$LOG" 2>&1 || \
-        warn "one of the services failed to start — check 'systemctl status guacd guac-tomcat apache2'"
+    systemctl enable --now guacd eve-console-mux eve-guac-lite apache2 mariadb >>"$LOG" 2>&1 \
+        || warn "one of the services failed to start — check 'systemctl status guacd eve-console-mux eve-guac-lite apache2'"
+    systemctl enable --now eve-token-janitor.timer >>"$LOG" 2>&1 || true
 
     # Non-interactive first-boot config (replaces the interactive OVF wizard).
     # Skipped when a previous install/wizard already configured this host.
@@ -353,7 +323,7 @@ EOF
     ok "services configured and started"
 }
 
-# ----------------------------- guacd + tomcat builders ----------------------
+# ----------------------------- guacd + web-console builders -----------------
 build_guacd() {
     log "Building guacd ${GUAC_VER} from source..."
     local dir="/tmp/guacamole-server-${GUAC_VER}"
@@ -374,72 +344,26 @@ build_guacd() {
     ok "guacd ready at /usr/local/sbin/guacd"
 }
 
-deploy_guacamole() {
-    log "Deploying Guacamole ${GUAC_VER} on Tomcat 9..."
-    local T="/opt/tomcat9"
-    if [[ ! -x "$T/bin/catalina.sh" ]]; then
-        rm -rf /tmp/tomcat9.tgz
-        curl -fsSL -o /tmp/tomcat9.tgz "$TOMCAT9_URL" >>"$LOG" 2>&1 \
-            || fail "Tomcat 9 download failed (see $LOG)"
-        tar xzf /tmp/tomcat9.tgz -C /opt >>"$LOG" 2>&1
-        mv "/opt/apache-tomcat-9.0.104" "$T"
-    fi
+deploy_webconsole() {
+    log "Deploying the PNETLab-style web console (no Tomcat)..."
+    local B="/opt/unetlab/html/console/backend"
+    [[ -f "$B/console_mux.py" ]] || fail "console_mux.py missing from $SRC_DIR/html/console/backend"
+    [[ -f "$B/guacamole-lite-server.js" ]] || fail "guacamole-lite-server.js missing"
 
-    # MySQL JDBC auth provider. Guacamole 1.x loads providers as EXTENSIONS from
-    # $GUACAMOLE_HOME/extensions/*.jar (guac-manifest.json inside) — NOT from
-    # WEB-INF/lib and NOT via ServiceLoader. The Apache tarball ships the fat jar
-    # with all deps nested inside, which is exactly what the extension loader wants.
-    local AJ="/usr/src/guacamole-auth-jdbc-${GUAC_VER}"
-    if [[ ! -f "$AJ/mysql/guacamole-auth-jdbc-mysql-${GUAC_VER}.jar" ]]; then
-        rm -rf "$AJ"; mkdir -p "$AJ"
-        curl -fsSL "https://archive.apache.org/dist/guacamole/${GUAC_VER}/binary/guacamole-auth-jdbc-${GUAC_VER}.tar.gz" \
-            | tar xz -C "$AJ" --strip-components=1 >>"$LOG" 2>&1 \
-            || fail "guacamole-auth-jdbc download failed (see $LOG)"
+    # guacamole-lite (npm) — the Node WS->guacd bridge for RDP nodes.
+    if [[ ! -d "$B/node_modules/guacamole-lite" ]]; then
+        (cd "$B" && npm install --omit=dev --no-audit --no-fund guacamole-lite@1.2.0) >>"$LOG" 2>&1 \
+            || fail "npm install guacamole-lite failed (see $LOG)"
     fi
-    mkdir -p /etc/guacamole/extensions
-    cp -f "$AJ/mysql/guacamole-auth-jdbc-mysql-${GUAC_VER}.jar" /etc/guacamole/extensions/
+    node -e "require('$B/node_modules/guacamole-lite')" >>"$LOG" 2>&1 \
+        || fail "guacamole-lite module does not load under $(node --version)"
 
-    # MySQL JDBC driver for Guacamole's DB auth (webapp classpath)
-    local lib="$T/webapps/guacamole/WEB-INF/lib"
-    mkdir -p "$lib"
-    if [[ ! -f "$lib/mysql-connector-j.jar" ]]; then
-        curl -fsSL -o "$lib/mysql-connector-j.jar" \
-            "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar" >>"$LOG" 2>&1 \
-            || warn "MySQL connector download failed — Guacamole DB auth will not work"
-    fi
+    # Python bridge deps must import as www-data will run them.
+    python3 -c 'import websockets, telnetlib3' >>"$LOG" 2>&1 \
+        || fail "python console-mux deps missing (websockets/telnetlib3)"
 
-    # Extract the WAR over the webapp (keeps WEB-INF/lib + classes we added)
-    local war="/tmp/guacamole-${GUAC_VER}.war"
-    if [[ ! -f "$war" ]]; then
-        curl -fsSL -o "$war" \
-            "https://archive.apache.org/dist/guacamole/${GUAC_VER}/binary/guacamole-${GUAC_VER}.war" >>"$LOG" 2>&1 \
-            || fail "Guacamole WAR download failed (see $LOG)"
-    fi
-    rm -rf /tmp/guac-war && mkdir -p /tmp/guac-war
-    (cd /tmp/guac-war && jar xf "$war" 2>/dev/null || python3 -c "import zipfile;zipfile.ZipFile('$war').extractall('.')") >>"$LOG" 2>&1
-    # Copy app assets into the webapp without clobbering our WEB-INF additions
-    local W="$T/webapps/guacamole"
-    mkdir -p "$W/WEB-INF/classes"
-    cp -a /tmp/guac-war/META-INF "$W/" 2>/dev/null || true
-    for d in css js images fonts app layouts guacamole-common-js; do
-        [[ -e "/tmp/guac-war/$d" ]] && cp -a "/tmp/guac-war/$d" "$W/"
-    done
-    for f in index.html *.js *.css templates.js; do
-        [[ -e "/tmp/guac-war/$f" ]] && cp -a "/tmp/guac-war/$f" "$W/" 2>/dev/null || true
-    done
-
-    # JDBC properties (also written in phase_database; keep in sync)
-    cat > /etc/guacamole/guacamole.properties <<'EOF'
-mysql-hostname: 127.0.0.1
-mysql-port: 3306
-mysql-database: guacdb
-mysql-username: guacuser
-mysql-password: eve-ng
-mysql-driver-class: com.mysql.cj.jdbc.Driver
-guacd-hostname: 127.0.0.1
-guacd-port: 4822
-EOF
-    ok "Guacamole deployed to ${T}/webapps/guacamole (+ JDBC auth extension)"
+    chown -R www-data:www-data /opt/unetlab/html/console
+    ok "web console bridges ready (console_mux.py + guacamole-lite@$(node -p "require('$B/node_modules/guacamole-lite/package.json').version" 2>/dev/null || echo '?'))"
 }
 
 # ----------------------------- verify ---------------------------------------
@@ -455,7 +379,7 @@ verify() {
         sleep 2; ((i++))
     done
 
-    # Login smoke test (admin/eve) — also creates the per-user Guacamole row
+    # Login smoke test (admin/eve)
     local rc
     rc="$(curl -s -c /tmp/.evejar -X POST http://127.0.0.1/api/auth/login \
             -H 'Content-Type: application/json' \
@@ -466,14 +390,20 @@ verify() {
         warn "login smoke test failed — check $LOG (response: ${rc:0:120})"
     fi
 
-    # Guacamole token API through the Apache proxy (what EVE calls on login)
-    local tok
-    tok="$(curl -s -X POST http://127.0.0.1/html5/api/tokens \
-            --data-urlencode 'username=admin' --data-urlencode 'password=unl')"
-    if echo "$tok" | grep -q authToken; then
-        ok "Guacamole token API works — VNC console ready"
+    # Web console: viewer page through Apache + loopback bridges listening.
+    if curl -fsS -o /dev/null "http://127.0.0.1/console/" 2>>"$LOG"; then
+        ok "console viewer served at /console/"
     else
-        warn "Guacamole token API not answering — check 'systemctl status guacd guac-tomcat' (response: ${tok:0:120})"
+        warn "console viewer not answering — check apache2"
+    fi
+    local p allup=1
+    for p in 6080 8022 8081; do
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then allup=0; break; fi
+    done
+    if [[ $allup -eq 1 ]]; then
+        ok "web console bridges listening (vnc:6080 telnet:8022 guac:8081)"
+    else
+        warn "a web console bridge is not listening — check 'systemctl status eve-console-mux eve-guac-lite'"
     fi
 
     echo

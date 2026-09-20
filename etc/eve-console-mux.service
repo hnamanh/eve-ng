@@ -1,0 +1,28 @@
+[Unit]
+Description=EVE-NG Resolute telnet and VNC WebSocket console mux
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Environment=PNET_TOKEN_DIR=/dev/shm/eve-tokens
+Environment=PNET_CONSOLE_MUX_HOST=127.0.0.1
+Environment=PNET_TELNET_BRIDGE_PORT=8022
+Environment=PNET_VNC_BRIDGE_HOST=127.0.0.1
+Environment=PNET_VNC_BRIDGE_PORT=6080
+# Fail before changing either user-facing route when an offline dependency is absent.
+ExecStartPre=/usr/bin/python3 -c 'import websockets, telnetlib3'
+# /dev/shm is cleared on reboot and tmpfiles may not have run yet. The '+' prefix
+# performs this setup as root before the service enters its sandbox.
+ExecStartPre=+/usr/bin/install -d -m 0750 -o www-data -g www-data /dev/shm/eve-tokens
+ExecStart=/usr/bin/python3 /opt/unetlab/html/console/backend/console_mux.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
