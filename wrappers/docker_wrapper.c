@@ -68,7 +68,7 @@ int main (int argc, char *argv[]) {
     // Other parameters
     int i = -1;                             // Counter
     int j = -1;                             // Counter
-    int opt = NULL;                         // Store CMD options
+    int opt;                         // Store CMD options
     int rc = -1;                            // Generic return code
     struct sigaction sa;                    // Manage signals (SIGHUP, SIGTERM...)
 

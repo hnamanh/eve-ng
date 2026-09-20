@@ -88,7 +88,7 @@ int main (int argc, char *argv[]) {
     int af_ready = 0;                       // 1 = AF_UNIX files are configured (needed if IOL is delayed)
     int i = -1;                             // Counter
     int j = -1;                             // Counter
-    int opt = NULL;                         // Store CMD options
+    int opt;                         // Store CMD options
     int rc = -1;                            // Generic return code
     char *tmp = NULL;                       // Generic char string
     struct sigaction sa;                    // Manage signals (SIGHUP, SIGTERM...)
