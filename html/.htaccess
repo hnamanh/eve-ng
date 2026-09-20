@@ -41,5 +41,8 @@ php_value upload_max_filesize 180M
 
 	# If URL is empty, call the theme
 	#RewriteRule ^$ /themes/default/ [B,L,QSA]
-	RewriteRule ^$ /themes/adminLTE/ [B,L,QSA]
+	# PNETLab GUI (Resolute): bare host lands on the dashboard; unauthenticated
+# visitors are bounced to /login/ by the dashboard's own 401 guard.
+RewriteRule ^$ /main/ [R=302,L]
+
 </IfModule>

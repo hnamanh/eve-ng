@@ -1157,11 +1157,12 @@ class Node {
 			} else {
 				$console=$this->console ;
 			}
-			// Resolute web console (ported from PNETLab): the viewer mints its own
-			// short-lived, session-gated token on demand via /console/token_mint.php,
-			// which re-checks auth + lab ownership server-side. No per-user Guacamole
-			// account or pre-registered connection is needed (stateless design).
-			return '/console/?node='.$this->id.'&type='.urlencode($console).'&name='.urlencode($this->name);
+			// Resolute web console (GUI ported from PNETLab): the tabbed console at
+			// /console/ lists this user's open lab and mints short-lived, session-gated
+			// tokens on demand via token_mint.php (auth + lab ownership re-checked
+			// server-side). ?node= opens just this node as a single tab; the lane is
+			// derived from the live node data, so no type/name in the URL.
+			return '/console/?node='.$this->id;
 		}
 	}
 

@@ -188,13 +188,26 @@ function apiLogout($db, $cookie) {
 /*
  * Function to check authorization
  *
- * @param	PDO			$db				PDO object for database connection
- * @param	String		$cookie			Session cookie
- * @return	Array						Username, role, tenant if logged in; JSend data if not authorized
+ * @param	PDO		$db			PDO object for database connection
+ * @param	String|Array	$cookie		Session cookie, or a list of candidate values
+ * @return	Array					Username, role, tenant if logged in; JSend data if not authorized
  */
 function apiAuthorization($db, $cookie) {
+	// Browsers may send the session cookie under two paths (legacy '/api/' + new '/')
+	// at once; PHP's first-value-wins parsing can then hand us a stale value. Accept
+	// a list of candidates and try each until one authenticates.
+	$candidates = is_array($cookie) ? array_values(array_unique(array_filter((array) $cookie))) : array($cookie);
+
 	$output = Array();
-	$user = getUserByCookie($db, $cookie);	// This will check session/web/pod expiration too
+	$user = False;
+	foreach ($candidates as $candidate) {
+		if (!is_string($candidate) || $candidate === '') continue;
+		$u = getUserByCookie($db, $candidate);	// This will check session/web/pod expiration too
+		if (!empty($u)) {
+			$user = $u;
+			break;
+		}
+	}
 
 	if (empty($user)) {
 		// Used not logged in
@@ -203,8 +216,9 @@ function apiAuthorization($db, $cookie) {
 		$output['message'] = $GLOBALS['messages']['90001'];
 		return Array(False, False, $output);
 	} else {
-		// User logged in
-		$rc = updateUserCookie($db, $user['username'], $cookie);
+		// User logged in — pin the DB row to the candidate that actually worked so
+		// subsequent requests (and single-session rotation) stay consistent.
+		$rc = updateUserCookie($db, $user['username'], is_array($cookie) ? $candidates[0] : $cookie);
 		if ($rc !== 0) {
 			// Cannot update user cookie
 			$output['code'] = 500;
@@ -215,5 +229,26 @@ function apiAuthorization($db, $cookie) {
 	}
 
 	return Array($user, $user['tenant'], False);
+}
+
+/*
+ * Collect every value of the session cookie from the raw Cookie header.
+ * PHP's $_COOKIE keeps only one value per name; this recovers all of them so
+ * apiAuthorization() can try each (see its docblock).
+ *
+ * @param	String	$name	Cookie name
+ * @return	Array			Deduplicated list of values, in header order
+ */
+function sessionCookieCandidates($name) {
+	$raw = isset($_SERVER['HTTP_COOKIE']) ? $_SERVER['HTTP_COOKIE'] : '';
+	$values = array();
+	foreach (explode(';', $raw) as $pair) {
+		$eq = strpos($pair, '=');
+		if ($eq === False) continue;
+		$key = trim(substr($pair, 0, $eq));
+		$val = trim(substr($pair, $eq + 1));
+		if ($key === $name && $val !== '') $values[] = $val;
+	}
+	return array_values(array_unique($values));
 }
 ?>
