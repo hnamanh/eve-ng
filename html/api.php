@@ -187,7 +187,7 @@ $app -> get('/api/status', function() use ($app, $db) {
 	$output['data']['version'] = VERSION;
 	$cmd = '/opt/qemu/bin/qemu-system-x86_64 -version | sed \'s/.* \([0-9]*\.[0-9.]*\.[0-9.]*\).*/\1/g\'';
 	exec($cmd, $o, $rc);
-	if ($rc != 0) {
+	if ($rc != 0 || empty($o[0])) {
 		error_log(date('M d H:i:s ').'ERROR: '.$GLOBALS['messages'][60044]);
 		$output['data']['qemu_version'] = '';
 	} else {
@@ -196,7 +196,7 @@ $app -> get('/api/status', function() use ($app, $db) {
 	$o = "" ;
 	$cmd = 'cat /sys/kernel/mm/uksm/run';
 	exec($cmd, $o, $rc);
-	if ($rc != 0) { 
+	if ($rc != 0 || empty($o[0])) { 
 		$output['data']['uksm'] = 'unsupported';
 	} else {
 		if ($o[0] == "1") {
@@ -208,7 +208,7 @@ $app -> get('/api/status', function() use ($app, $db) {
         $o = "" ;
         $cmd = 'cat /sys/kernel/mm/ksm/run';
         exec($cmd, $o, $rc);
-        if ($rc != 0) {
+        if ($rc != 0 || empty($o[0])) {
                 $output['data']['ksm'] = 'unsupported';
         } else {
                 if ($o[0] == "1") {
@@ -220,7 +220,7 @@ $app -> get('/api/status', function() use ($app, $db) {
         $o = "" ;
         $cmd = 'systemctl is-active cpulimit.service';
         exec($cmd, $o, $rc);
-        if ($rc != 0) {
+        if ($rc != 0 || empty($o[0])) {
                 error_log(date('M d H:i:s ').'ERROR: '.$GLOBALS['messages'][60044]);
                 $output['data']['cpulimit'] = 'disabled';
         } else {

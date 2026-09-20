@@ -39,5 +39,5 @@ $p['ethernet'] = 2;
 $p['console'] = 'telnet'; 
 $p['qemu_arch'] = 'x86_64'; 
 $p['qemu_nic'] = 'virtio-net-pci';
-$p['qemu_options'] = '-machine type=pc-1.0,accel=kvm -nographic -usbdevice tablet -boot order=dc -serial mon:stdio'; 
+$p['qemu_options'] = '-machine pc,accel=kvm -nographic -usbdevice tablet -boot order=dc -serial mon:stdio'; 
 ?> 

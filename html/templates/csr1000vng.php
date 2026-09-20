@@ -40,5 +40,5 @@ $p['console'] = 'telnet';
 $p['qemu_arch'] = 'x86_64';
 $p['qemu_version'] = '2.2.0';
 $p['qemu_nic'] = 'virtio-net-pci'; 
-$p['qemu_options'] = '-machine type=pc-1.0,accel=kvm -serial mon:stdio -nographic -nodefconfig -nodefaults -rtc base=utc';
+$p['qemu_options'] = '-machine pc,accel=kvm -serial mon:stdio -nographic -nodefconfig -nodefaults -rtc base=utc';
 ?>

@@ -43,9 +43,9 @@ $p['ethernet'] = 6;
 $p['console'] = 'telnet'; 
 $p['qemu_arch'] = 'x86_64';
 if (function_exists('isVirtual') && isVirtual()) {
-	$p['qemu_options'] = '-machine type=pc-1.0,accel=tcg';
+	$p['qemu_options'] = '-machine pc,accel=tcg';
 } else {
-	$p['qemu_options'] = '-machine type=pc-1.0,accel=kvm';
+	$p['qemu_options'] = '-machine pc,accel=kvm';
 }
 $p['qemu_options'] .= ' -serial mon:stdio -nographic -nodefconfig -nodefaults -rtc base=utc';
 ?>

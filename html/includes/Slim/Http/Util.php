@@ -57,7 +57,8 @@ class Util
      */
     public static function stripSlashesIfMagicQuotes($rawData, $overrideStripSlashes = null)
     {
-        $strip = is_null($overrideStripSlashes) ? get_magic_quotes_gpc() : $overrideStripSlashes;
+        // Magic quotes were removed in PHP 8.0 — always false on modern PHP
+        $strip = is_null($overrideStripSlashes) ? false : $overrideStripSlashes;
         if ($strip) {
             return self::stripSlashes($rawData);
         }
@@ -91,38 +92,37 @@ class Util
      */
     public static function encrypt($data, $key, $iv, $settings = array())
     {
-        if ($data === '' || !extension_loaded('mcrypt')) {
+        if ($data === '') {
             return $data;
         }
 
-        //Merge settings with defaults
+        //Merge settings with defaults (mcrypt RIJNDAEL-256/CBC == AES-256-CBC)
         $defaults = array(
-            'algorithm' => MCRYPT_RIJNDAEL_256,
-            'mode' => MCRYPT_MODE_CBC
+            'algorithm' => 'aes-256-cbc',
+            'mode' => 'cbc'
         );
         $settings = array_merge($defaults, $settings);
 
-        //Get module
-        $module = mcrypt_module_open($settings['algorithm'], '', $settings['mode'], '');
-
-        //Validate IV
-        $ivSize = mcrypt_enc_get_iv_size($module);
+        //Validate IV (AES block size is 16 bytes)
+        $ivSize = 16;
         if (strlen($iv) > $ivSize) {
             $iv = substr($iv, 0, $ivSize);
+        } elseif (strlen($iv) < $ivSize) {
+            $iv = str_pad($iv, $ivSize, "\0");
         }
 
-        //Validate key
-        $keySize = mcrypt_enc_get_key_size($module);
+        //Validate key (AES-256 needs a 32-byte key)
+        $keySize = 32;
         if (strlen($key) > $keySize) {
             $key = substr($key, 0, $keySize);
+        } elseif (strlen($key) < $keySize) {
+            $key = str_pad($key, $keySize, "\0");
         }
 
         //Encrypt value
-        mcrypt_generic_init($module, $key, $iv);
-        $res = @mcrypt_generic($module, $data);
-        mcrypt_generic_deinit($module);
+        $res = openssl_encrypt($data, $settings['algorithm'], $key, OPENSSL_RAW_DATA, $iv);
 
-        return $res;
+        return ($res === false) ? $data : $res;
     }
 
     /**
@@ -141,37 +141,39 @@ class Util
      */
     public static function decrypt($data, $key, $iv, $settings = array())
     {
-        if ($data === '' || !extension_loaded('mcrypt')) {
+        if ($data === '') {
             return $data;
         }
 
-        //Merge settings with defaults
+        //Merge settings with defaults (mcrypt RIJNDAEL-256/CBC == AES-256-CBC)
         $defaults = array(
-            'algorithm' => MCRYPT_RIJNDAEL_256,
-            'mode' => MCRYPT_MODE_CBC
+            'algorithm' => 'aes-256-cbc',
+            'mode' => 'cbc'
         );
         $settings = array_merge($defaults, $settings);
 
-        //Get module
-        $module = mcrypt_module_open($settings['algorithm'], '', $settings['mode'], '');
-
-        //Validate IV
-        $ivSize = mcrypt_enc_get_iv_size($module);
+        //Validate IV (AES block size is 16 bytes)
+        $ivSize = 16;
         if (strlen($iv) > $ivSize) {
             $iv = substr($iv, 0, $ivSize);
+        } elseif (strlen($iv) < $ivSize) {
+            $iv = str_pad($iv, $ivSize, "\0");
         }
 
-        //Validate key
-        $keySize = mcrypt_enc_get_key_size($module);
+        //Validate key (AES-256 needs a 32-byte key)
+        $keySize = 32;
         if (strlen($key) > $keySize) {
             $key = substr($key, 0, $keySize);
+        } elseif (strlen($key) < $keySize) {
+            $key = str_pad($key, $keySize, "\0");
         }
 
         //Decrypt value
-        mcrypt_generic_init($module, $key, $iv);
-        $decryptedData = @mdecrypt_generic($module, $data);
+        $decryptedData = openssl_decrypt($data, $settings['algorithm'], $key, OPENSSL_RAW_DATA, $iv);
+        if ($decryptedData === false) {
+            return $data;
+        }
         $res = rtrim($decryptedData, "\0");
-        mcrypt_generic_deinit($module);
 
         return $res;
     }

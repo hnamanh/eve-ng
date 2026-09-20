@@ -292,13 +292,13 @@ function checkPosition($s) {
 function checkUserExpiration($db, $username) {
 	$now = time() + SESSION;
 	try {
-		$query = 'SELECT COUNT(*) AS rows FROM users WHERE username = :username AND (expiration < 0 OR expiration >= :expiration);';
+		$query = 'SELECT COUNT(*) AS cnt FROM users WHERE username = :username AND (expiration < 0 OR expiration >= :expiration);';
 		$statement = $db -> prepare($query);
 		$statement -> bindParam(':expiration', $now, PDO::PARAM_INT);
 		$statement -> bindParam(':username', $username, PDO::PARAM_STR);
 		$statement -> execute();
 		$result = $statement -> fetch();
-		if ($result['rows'] == 1) {
+		if ($result['cnt'] == 1) {
 			return True;
 		} else {
 			return False;
@@ -334,16 +334,16 @@ function checkUuid($s) {
 function configureUserPod($db, $username) {
 	// Check if a POD is already been assigned
 	try {
-		$query = 'SELECT COUNT(*) AS rows FROM pods LEFT JOIN users ON pods.username = users.username WHERE users.username = :username;';
+		$query = 'SELECT COUNT(*) AS cnt FROM pods LEFT JOIN users ON pods.username = users.username WHERE users.username = :username;';
 		$statement = $db -> prepare($query);
 		$statement -> bindParam(':username', $username, PDO::PARAM_STR);
 		$statement -> execute();
 		$result = $statement -> fetch();
-		if ($result['rows'] > 1) {
+		if ($result['cnt'] > 1) {
 			// We expect one or none rows
 			error_log(date('M d H:i:s ').'ERROR: '.$GLOBALS['messages'][90015]);
 			return 90015;
-		} else if ($result['rows'] == 1) {
+		} else if ($result['cnt'] == 1) {
 			// POD already assigned
 			return 0;
 		}
@@ -1057,16 +1057,27 @@ function updateUserToken($db,$username,$pod) {
 	$data = array('username' => $username, 'password' => 'unl');
 
 	$options = array(
-        	'http' => array(
-        	'header'  => "Content-type: application/x-www-form-urlencoded\r\n",
-        	'method'  => 'POST',
-        	'content' => http_build_query($data),
-    		)
+        'http' => array(
+        'header'  => "Content-type: application/x-www-form-urlencoded\r\n",
+        'method'  => 'POST',
+        'content' => http_build_query($data),
+    )
 	);
 
-	$context  = stream_context_create($options);
-	$result = (array) json_decode(file_get_contents($url, false, $context));
-	$token = $result['authToken'];
+	try {
+		$context  = stream_context_create($options);
+		$result = (array) json_decode(file_get_contents($url, false, $context));
+		if (!isset($result['authToken'])) {
+			error_log(date('M d H:i:s ').'WARNING: Guacamole token endpoint returned no authToken (is guacd/Tomcat running?)');
+			return False;
+		}
+		$token = $result['authToken'];
+	} catch (Exception $e) {
+		// Guacamole not reachable — do not break login, VNC will be unavailable.
+		error_log(date('M d H:i:s ').'WARNING: Could not obtain Guacamole token: '.(string)$e);
+		return False;
+	}
+
 	$query = "delete from html5 where username = '".$username."';";
 	$statement = $db -> prepare($query);
 	$statement -> execute();

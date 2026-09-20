@@ -19,14 +19,22 @@
  * @return  int                         CPU usage (percentage) or -1 if not valid
  */
 function apiGetCPUUsage() {
-	// Checking CPU usage
-	$cmd = 'top -b -n2 -p1 -d1';
-	exec($cmd, $o, $rc);
-	if ($rc == 0) {
-		return 100 - (int) round(preg_replace('/^.+ni[, ]+([0-9\.]+) id,.+/', '$1', $o[11]));
-	} else {
-		return -1;
-	}
+	// Sample /proc/stat twice (robust across top/locale changes)
+	$read = function () {
+		$line = @file('/proc/stat', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+		if (!$line || strpos($line[0], 'cpu ') !== 0) return null;
+		$f = array_map('intval', explode(' ', substr($line[0], 4)));
+		$idle = ($f[3] ?? 0) + ($f[4] ?? 0); // idle + iowait
+		return [array_sum($f), $idle];
+	};
+	$a = $read();
+	usleep(200000); // 200ms window
+	$b = $read();
+	if (!$a || !$b) return -1;
+	$dtot = $b[0] - $a[0];
+	$didle = $b[1] - $a[1];
+	if ($dtot <= 0) return -1;
+	return (int) round(100 * (1 - $didle / $dtot));
 }
 
 /*
@@ -65,16 +73,19 @@ function apiGetOldMemUsage() {
 }
 
 function apiGetMemUsage() {
-	$data = explode("\n", file_get_contents("/proc/meminfo"));
+	$data = @file('/proc/meminfo', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+	if (!$data) return Array(-1, -1);
 	array_pop($data) ;
 	$meminfo = array();
 	foreach ($data as $line) {
+		if (strpos($line, ':') === false) continue;
 		list($key, $val) = explode(":", $line);
 		$meminfo[$key] = (int) preg_replace('/^([0-9\.]+)\ +.*$/','$1',trim($val));
 	}
-	$total=$meminfo["MemTotal"];
-	$cached=$meminfo["Cached"];
-	$avail=$meminfo["MemAvailable"];
+	$total=$meminfo["MemTotal"] ?? 0;
+	if ($total <= 0) return Array(-1, -1);
+	$cached=$meminfo["Cached"] ?? 0;
+	$avail=$meminfo["MemAvailable"] ?? $total;
 	return Array(round(100 - ($cached / $total * 100)), round(100 - ($avail / $total * 100)));
 }
 
@@ -95,7 +106,7 @@ function apiGetRunningWrappers() {
 	exec($cmd, $o_docker, $rc);
 	$cmd = 'pgrep -f -c -P 1 vpcs';
 	exec($cmd, $o_vpcs, $rc);
-	return Array((int) current($o_iol), (int) current($o_dynamips), (int) current($o_qemu), (int) current($o_docker), (int) current($o_vpcs));
+	return Array((int) ($o_iol[0] ?? 0), (int) ($o_dynamips[0] ?? 0), (int) ($o_qemu[0] ?? 0), (int) ($o_docker[0] ?? 0), (int) ($o_vpcs[0] ?? 0));
 }
 
 /*
@@ -104,16 +115,17 @@ function apiGetRunningWrappers() {
  * @return  int                         Swap usage (percentage) or -1 if not valid
  */
 function apiGetSwapUsage() {
-	// Checking swap usage
-	$cmd = 'free';
-	exec($cmd, $o, $rc);
-	if ($rc == 0) {
-		$total = (int) preg_replace('/^Swap:\ +([0-9\.]+)\ +([0-9\.]+)\ +([0-9\.]+)$/', '$1', $o[2]);
-		$used = (int) preg_replace('/^Swap:\ +([0-9\.]+)\ +([0-9\.]+)\ +([0-9\.]+)$/', '$3', $o[2]);
-		return 100 - round($used / $total * 100);
-	} else {
-		return -1;
+	// Read /proc/meminfo (robust; no swap => 100% free)
+	$mem = array();
+	foreach (@file('/proc/meminfo', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+		if (strpos($line, ':') === false) continue;
+		list($k, $v) = explode(':', $line);
+		$mem[trim($k)] = (int) preg_replace('/^([0-9]+).*/', '$1', trim($v));
 	}
+	$total = $mem['SwapTotal'] ?? 0;
+	if ($total <= 0) return 100; // no swap configured
+	$free = $mem['SwapFree'] ?? 0;
+	return (int) round(100 * $free / $total);
 }
 /*
  * Function to set UKSM status.

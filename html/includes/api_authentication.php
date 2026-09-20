@@ -51,14 +51,14 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 		return $output;
 	}
 
-	$query = 'SELECT COUNT(*) as rows FROM users WHERE username = :username AND password = :password;';
+	$query = 'SELECT COUNT(*) as cnt FROM users WHERE username = :username AND password = :password;';
 	$statement = $db -> prepare($query);
 	$statement -> bindParam(':username', $username, PDO::PARAM_STR);
 	$statement -> bindParam(':password', $hash, PDO::PARAM_STR);
 	$statement -> execute();
 	$result = $statement -> fetch();
 
-	if ($result['rows'] == 1) {
+	if ($result['cnt'] == 1) {
 		// User/Password match
 		if (checkUserExpiration($db, $username) === False) {
 			$output['code'] = 401;
@@ -103,10 +103,13 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 			$pod = $result["id"];
 	
 			
-			$query = "replace into guacamole_user(user_id,username, password_hash) values  ( ".($pod+1000)." , '".$username."', UNHEX(SHA2('unl',256) ));";
-	                $statement = $html5_db -> prepare($query);
-			$statement -> execute();
-	
+			// Guacamole >= 1.0 verifies: SHA256(password + HEX(salt)) == password_hash
+			$salt = random_bytes(32);
+			$hash = hash('sha256', 'unl' . strtoupper(bin2hex($salt)), true);
+			$query = "replace into guacamole_user(user_id,username,password_salt,password_hash) values (?,?,?,?)";
+			$statement = $html5_db -> prepare($query);
+			$statement -> execute(array($pod+1000, $username, $salt, $hash));
+
 			$query="replace into guacamole_user_permission ( user_id , affected_user_id , permission ) values ( '".($pod+1000)."' , '".($pod+1000)."' , 'UPDATE' ) ;";
 			$statement = $html5_db -> prepare($query);
 			$statement -> execute();
@@ -127,7 +130,7 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 		$output['code'] = 200;
 		$output['status'] = 'success';
 		$output['message'] = $GLOBALS['messages'][90013];
-	} else if ($result['rows'] == 0) {
+	} else if ($result['cnt'] == 0) {
 		// User/Password does not match
 		$output['code'] = 400;
 		$output['status'] = 'fail';

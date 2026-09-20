@@ -38,5 +38,5 @@ $p['ram'] = 2048;
 $p['ethernet'] = 2;
 $p['console'] = 'vnc';
 $p['qemu_arch'] = 'x86_64';
-$p['qemu_options'] = '-machine type=pc-1.0,accel=kvm -smbios type=1,manufacturer=\"VMware Inc.\",product=\"VMware Virtual Platform\",serial=\"VMware-12 00 11 22 33 44 55 66-77 88 99 aa bb cc dd ee\"';
+$p['qemu_options'] = '-machine pc,accel=kvm -smbios type=1,manufacturer=\"VMware Inc.\",product=\"VMware Virtual Platform\",serial=\"VMware-12 00 11 22 33 44 55 66-77 88 99 aa bb cc dd ee\"';
 ?>

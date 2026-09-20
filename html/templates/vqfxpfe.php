@@ -39,5 +39,5 @@ $p['ethernet'] = 2;
 $p['console'] = 'vnc'; 
 $p['qemu_arch'] = 'x86_64'; 
 $p['qemu_nic'] = 'e1000';
-$p['qemu_options'] = '-machine type=pc-1.0,accel=kvm -vga std -usbdevice tablet -boot order=dc'; 
+$p['qemu_options'] = '-machine pc,accel=kvm -vga std -usbdevice tablet -boot order=dc'; 
 ?> 
