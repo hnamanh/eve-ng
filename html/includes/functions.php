@@ -1047,7 +1047,7 @@ function html5AddSession($db, $name, $type, $port, $userid) {
         $statement = $db -> prepare($query);
         $statement -> execute();
 
-	$query = "replace into guacamole_connection_permission ( user_id, connection_id, permission ) values ( ".($userid+1000)." , ".$port.", 'UPDATE' );";
+	$query = "replace into guacamole_connection_permission ( entity_id, connection_id, permission ) values ( ".($userid+1000)." , ".$port.", 'UPDATE' );";
 	$statement = $db -> prepare($query);
 	$statement -> execute();
 }
@@ -1101,7 +1101,7 @@ function getHtml5Token($userid) {
 function addHtml5Perm($port,$tenant) {
 	try {
 		$db = html5_checkDatabase() ;
-		$query = "replace into guacamole_connection_permission ( user_id, connection_id, permission ) values ( ".($tenant+1000)." , ".$port.", 'READ' );";
+		$query = "replace into guacamole_connection_permission ( entity_id, connection_id, permission ) values ( ".($tenant+1000)." , ".$port.", 'READ' );";
 		$statement = $db -> prepare($query);
         	$statement -> execute();
 	} catch (Exception $e) {

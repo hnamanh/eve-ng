@@ -1,27 +1,29 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  EVE-NG one-shot install for UBUUNTU 26 (Resolute) — from your fork
+#  EVE-NG one-shot install for UBUNTU 26 (Resolute) — "Resolute Edition"
 # -----------------------------------------------------------------------------
 #  Target : a fresh Ubuntu 26.04 LTS amd64 VM with KVM (VT-x/AMD-V).
-#           EVE-NG 2.0.x was ported to run on modern PHP/Apache/MariaDB/QEMU.
+#           EVE-NG 2.0.x ported to modern PHP/Apache/MariaDB/QEMU/Guacamole.
 #
-#  Usage  : sudo ./install.sh            # do everything
-#           sudo ./install.sh build      # only prepare /opt/unetlab + wrappers
-#           sudo ./install.sh install    # only services/DB/config (code present)
+#  Usage  : sudo ./install.sh                # do everything
+#           sudo ./install.sh build          # only deps + /opt/unetlab + wrappers
+#           sudo ./install.sh install        # only DB/services/config (code present)
 #
 #  What it does, end to end:
-#    0. Checks host (root, amd64, ubuntu 26) and installs dependencies from the
-#       distro repos (PHP 8.x, Apache 2.4, MariaDB, QEMU, OVMF, Open vSwitch...).
+#    0. Checks host (root, amd64, ubuntu 26), installs dependencies from the
+#       distro repos (PHP 8.x, Apache 2.4, MariaDB, QEMU 10, OVMF, Open vSwitch).
 #    1. Clones your fork into /usr/src/eve-ng-public-dev and deploys the web UI
-#       to /opt/unetlab/html with the standard directory layout + permissions.
+#       to /opt/unetlab/html with the standard layout + permissions.
 #    2. Compiles the C wrappers (iol/qemu/dynamips) from source on this host.
 #    3. Builds guacd from source (no distro package) and deploys Guacamole 1.x
-#       on a standalone Tomcat 9 (distro Tomcat 10 is Jakarta-only).
-#    4. Creates the MySQL databases (eve_ng_db + guacdb), users, schema and the
-#       admin account; sets MariaDB root password to 'eve-ng'.
-#    5. Configures Apache (vhost on :80 with /html5/ proxy to Guacamole),
+#       on a standalone Tomcat 9 (distro Tomcat 10 is Jakarta-only), including
+#       the MySQL JDBC auth provider as a proper $GUACAMOLE_HOME extension.
+#    4. Creates the databases: eve_ng_db + guacdb with the OFFICIAL Guacamole
+#       1.6.0 schema (the 1.x layout moved usernames to guacamole_entity),
+#       users, and the admin account; sets MariaDB root password to 'eve-ng'.
+#    5. Configures Apache (vhost on :80 with /html5/ proxy + websocket tunnel),
 #       systemd services (guacd, tomcat9) and a non-interactive first-boot
-#       config so the web UI comes up immediately.
+#       network config so the web UI comes up immediately.
 #
 #  Result : EVE-NG at http://<this-host-ip>/   login admin / eve
 # =============================================================================
@@ -125,7 +127,6 @@ phase_deploy() {
     mkdir -p /opt/qemu/bin /opt/qemu/share/qemu
     ln -sf "$(command -v qemu-system-x86_64)" /opt/qemu/bin/qemu-system-x86_64
     ln -sf "$(command -v qemu-system-i386)"   /opt/qemu/bin/qemu-system-i386 2>/dev/null || true
-    ln -sf "$(command -v qemu-img)"           /opt/unetlab/../qemu-img 2>/dev/null || true
     ln -sf "$(command -v qemu-img)"           /opt/qemu/bin/qemu-img
     local ovf; ovf="$(find /usr/share/ovmf /usr/share/OVMF -name 'OVMF.fd' 2>/dev/null | head -1)"
     [[ -n "$ovf" ]] && cp -f "$ovf" /opt/qemu/share/qemu/OVMF.fd
@@ -168,14 +169,14 @@ EOF
 
     # Build guacd from source (no distro package on Ubuntu 26)
     build_guacd
-    # Deploy Guacamole web app on standalone Tomcat 9
+    # Deploy Guacamole web app + JDBC auth extension on standalone Tomcat 9
     deploy_guacamole
 }
 
 # ----------------------------- phase 2: database ----------------------------
 phase_database() {
     log "Phase 2 — MariaDB setup"
-    service mariadb start >>"$LOG" 2>&1 || true
+    systemctl enable --now mariadb >>"$LOG" 2>&1 || service mariadb start >>"$LOG" 2>&1 || true
     sleep 3
 
     # Root password must be 'eve-ng' (EVE code + preinst scripts expect it)
@@ -198,13 +199,29 @@ GRANT ALL ON guacdb.* TO 'guacuser'@'localhost' IDENTIFIED BY 'eve-ng';
 FLUSH PRIVILEGES;
 SQL
 
-    # Load schemas (idempotent: CREATE TABLE IF NOT EXISTS where possible)
+    # EVE schema (idempotent)
     mysql -u root --password=eve-ng eve_ng_db < /opt/unetlab/schema/unetlab-001-create-schema.sql >>"$LOG" 2>&1 \
         || warn "unetlab schema load reported an error (may already exist)"
-    for f in /opt/unetlab/schema/guacamole-*.sql; do
-        [[ -f "$f" ]] && mysql -u root --password=eve-ng guacdb < "$f" >>"$LOG" 2>&1 \
-            || warn "guacamole schema load reported an error (may already exist)"
-    done
+
+    # Guacamole: fresh DB with the OFFICIAL 1.6.0 schema. The 1.x layout moved
+    # usernames into guacamole_entity and switched permission tables to entity_id,
+    # so the old repo schemas are NOT compatible — use the ones shipped with the
+    # auth-jdbc package (downloaded in phase_deploy).
+    local AJ="/usr/src/guacamole-auth-jdbc-${GUAC_VER}"
+    mysql -u root --password=eve-ng -e "DROP DATABASE IF EXISTS guacdb; CREATE DATABASE guacdb CHARACTER SET utf8mb4;" >>"$LOG" 2>&1 \
+        || fail "guacdb recreate failed"
+    if [[ -f "$AJ/mysql/schema/001-create-schema.sql" ]]; then
+        mysql -u root --password=eve-ng guacdb < "$AJ/mysql/schema/001-create-schema.sql" >>"$LOG" 2>&1 \
+            || fail "guacamole ${GUAC_VER} schema load failed (see $LOG)"
+        [[ -f "$AJ/mysql/schema/002-create-admin-user.sql" ]] && \
+            mysql -u root --password=eve-ng guacdb < "$AJ/mysql/schema/002-create-admin-user.sql" >>"$LOG" 2>&1 || true
+        ok "guacdb created with official Guacamole ${GUAC_VER} schema (admin: guacadmin/guacadmin)"
+    else
+        for f in /opt/unetlab/schema/guacamole-*.sql; do
+            [[ -f "$f" ]] && mysql -u root --password=eve-ng guacdb < "$f" >>"$LOG" 2>&1 \
+                || warn "guacamole schema load reported an error (may already exist)"
+        done
+    fi
 
     # Admin user (password: eve) — only if not present
     local n; n="$(mysql -u root --password=eve-ng -N -e "SELECT COUNT(*) FROM eve_ng_db.users WHERE username='admin';" 2>/dev/null || echo 0)"
@@ -216,14 +233,6 @@ SQL
     else
         ok "admin user already present"
     fi
-
-    # Guacamole admin (guacadmin / eve-ng) — used by the web app itself
-    mysql -u root --password=eve-ng guacdb <<'SQL' >>"$LOG" 2>&1 || true
-SET @salt = UNHEX(SHA2(UUID(), 256));
-UPDATE guacamole_user SET password_salt = @salt,
-       password_hash = UNHEX(SHA2(CONCAT('eve-ng', HEX(@salt)), 256))
-WHERE username = 'guacadmin';
-SQL
 
     # Guacamole JDBC config (read by the web app at startup)
     mkdir -p /etc/guacamole
@@ -245,8 +254,8 @@ phase_services() {
     log "Phase 3 — Apache + systemd services"
 
     # PHP hardening for LXC/containers where /proc is restricted to own PID
-    echo 'pcre.jit=0' > /etc/php/8.5/apache2/conf.d/99-eve.ini 2>/dev/null || \
-        echo 'pcre.jit=0' > "$(ls -d /etc/php/*/apache2/conf.d 2>/dev/null | head -1)/99-eve.ini"
+    local confd; confd="$(ls -d /etc/php/*/apache2/conf.d 2>/dev/null | head -1)"
+    [[ -n "$confd" ]] && echo 'pcre.jit=0' > "$confd/99-eve.ini"
 
     # Apache vhost (from the repo, already 2.4-clean) on port 80
     cp "$SRC_DIR/etc/apache.conf" /etc/apache2/sites-available/unetlab.conf
@@ -310,10 +319,13 @@ EOF
     systemctl enable --now guacd guac-tomcat apache2 mariadb >>"$LOG" 2>&1 || \
         warn "one of the services failed to start — check 'systemctl status guacd guac-tomcat apache2'"
 
-    # Non-interactive first-boot config (replaces the interactive OVF wizard)
-    local hn="eve-ng"
-    echo "$hn" > /etc/hostname; hostname "$hn" 2>/dev/null || true
-    cat > /etc/network/interfaces <<'EOF'
+    # Non-interactive first-boot config (replaces the interactive OVF wizard).
+    # Skipped when a previous install/wizard already configured this host.
+    if [[ ! -f /opt/ovf/.configured ]]; then
+        mkdir -p /opt/ovf
+        local hn="eve-ng"
+        echo "$hn" > /etc/hostname; hostname "$hn" 2>/dev/null || true
+        cat > /etc/network/interfaces <<'EOF'
 auto lo
 iface lo inet loopback
 
@@ -323,9 +335,12 @@ iface pnet0 inet dhcp
     bridge_ports eth0
     bridge_stp off
 EOF
-    touch /opt/ovf/.configured 2>/dev/null || true
-    ifdown eth0 >>"$LOG" 2>&1 || true
-    ifup pnet0   >>"$LOG" 2>&1 || warn "could not bring up pnet0 yet (a reboot will)"
+        touch /opt/ovf/.configured
+        ifdown eth0 >>"$LOG" 2>&1 || true
+        ifup pnet0   >>"$LOG" 2>&1 || warn "could not bring up pnet0 yet (a reboot will)"
+    else
+        log "First-boot network config skipped (/opt/ovf/.configured present)"
+    fi
 
     ok "services configured and started"
 }
@@ -362,9 +377,23 @@ deploy_guacamole() {
         mv "/opt/apache-tomcat-9.0.104" "$T"
     fi
 
-    # MySQL JDBC driver for Guacamole's DB auth
+    # MySQL JDBC auth provider. Guacamole 1.x loads providers as EXTENSIONS from
+    # $GUACAMOLE_HOME/extensions/*.jar (guac-manifest.json inside) — NOT from
+    # WEB-INF/lib and NOT via ServiceLoader. The Apache tarball ships the fat jar
+    # with all deps nested inside, which is exactly what the extension loader wants.
+    local AJ="/usr/src/guacamole-auth-jdbc-${GUAC_VER}"
+    if [[ ! -f "$AJ/mysql/guacamole-auth-jdbc-mysql-${GUAC_VER}.jar" ]]; then
+        rm -rf "$AJ"; mkdir -p "$AJ"
+        curl -fsSL "https://archive.apache.org/dist/guacamole/${GUAC_VER}/binary/guacamole-auth-jdbc-${GUAC_VER}.tar.gz" \
+            | tar xz -C "$AJ" --strip-components=1 >>"$LOG" 2>&1 \
+            || fail "guacamole-auth-jdbc download failed (see $LOG)"
+    fi
+    mkdir -p /etc/guacamole/extensions
+    cp -f "$AJ/mysql/guacamole-auth-jdbc-mysql-${GUAC_VER}.jar" /etc/guacamole/extensions/
+
+    # MySQL JDBC driver for Guacamole's DB auth (webapp classpath)
     local lib="$T/webapps/guacamole/WEB-INF/lib"
-    mkdir -p "$lib" /etc/guacamole
+    mkdir -p "$lib"
     if [[ ! -f "$lib/mysql-connector-j.jar" ]]; then
         curl -fsSL -o "$lib/mysql-connector-j.jar" \
             "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar" >>"$LOG" 2>&1 \
@@ -402,7 +431,7 @@ mysql-driver-class: com.mysql.cj.jdbc.Driver
 guacd-hostname: 127.0.0.1
 guacd-port: 4822
 EOF
-    ok "Guacamole deployed to ${T}/webapps/guacamole"
+    ok "Guacamole deployed to ${T}/webapps/guacamole (+ JDBC auth extension)"
 }
 
 # ----------------------------- verify ---------------------------------------
@@ -418,7 +447,7 @@ verify() {
         sleep 2; ((i++))
     done
 
-    # Login smoke test (admin/eve)
+    # Login smoke test (admin/eve) — also creates the per-user Guacamole row
     local rc
     rc="$(curl -s -c /tmp/.evejar -X POST http://127.0.0.1/api/auth/login \
             -H 'Content-Type: application/json' \
@@ -429,16 +458,19 @@ verify() {
         warn "login smoke test failed — check $LOG (response: ${rc:0:120})"
     fi
 
-    # Guacamole reachable through the Apache proxy?
-    if curl -fsS -o /dev/null http://127.0.0.1/html5/ 2>>"$LOG"; then
-        ok "Guacamole console proxy (/html5/) is up"
+    # Guacamole token API through the Apache proxy (what EVE calls on login)
+    local tok
+    tok="$(curl -s -X POST http://127.0.0.1/html5/api/tokens \
+            --data-urlencode 'username=admin' --data-urlencode 'password=unl')"
+    if echo "$tok" | grep -q authToken; then
+        ok "Guacamole token API works — VNC console ready"
     else
-        warn "Guacamole proxy not answering — check 'systemctl status guacd guac-tomcat'"
+        warn "Guacamole token API not answering — check 'systemctl status guacd guac-tomcat' (response: ${tok:0:120})"
     fi
 
     echo
     echo -e "${c_grn}============================================================${c_rst}"
-    echo -e "${c_grn}  EVE-NG is installed on Ubuntu 26.${c_rst}"
+    echo -e "${c_grn}  EVE-NG Resolute Edition is installed on Ubuntu 26.${c_rst}"
     echo -e "  Web UI : http://${ip}/"
     echo -e "  Login  : admin / eve"
     echo -e "  Log    : ${LOG}"

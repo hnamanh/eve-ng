@@ -90,9 +90,8 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 			$query = "update users set html5 = 1 where username = '".$username."' ;";
 			$statement = $db -> prepare($query);
 			$statement -> execute();
-			// Add token guacamole to user
-			// HTML5 mode -> add cokies
-			$query = "delete from guacamole_user where username = '".$username."';";
+			// Guacamole 1.x: username lives in guacamole_entity; user row references it by entity_id
+			$query = "delete from guacamole_user where entity_id = (select entity_id from guacamole_entity where type='USER' and name = '".$username."')";
 			$statement = $html5_db -> prepare($query);
 			$statement -> execute();
 	
@@ -106,13 +105,20 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 			// Guacamole >= 1.0 verifies: SHA256(password + HEX(salt)) == password_hash
 			$salt = random_bytes(32);
 			$hash = hash('sha256', 'unl' . strtoupper(bin2hex($salt)), true);
-			$query = "replace into guacamole_user(user_id,username,password_salt,password_hash) values (?,?,?,?)";
-			$statement = $html5_db -> prepare($query);
-			$statement -> execute(array($pod+1000, $username, $salt, $hash));
 
-			$query="replace into guacamole_user_permission ( user_id , affected_user_id , permission ) values ( '".($pod+1000)."' , '".($pod+1000)."' , 'UPDATE' ) ;";
+			// Guacamole 1.x schema: username lives in guacamole_entity; the user row
+			// references it by entity_id. Keep EVE's pod+1000 id convention as entity_id.
+			$query = "replace into guacamole_entity (entity_id, name, type) values (?, ?, 'USER')";
 			$statement = $html5_db -> prepare($query);
-			$statement -> execute();
+			$statement -> execute(array($pod+1000, $username));
+
+			$query = "replace into guacamole_user(user_id,entity_id,password_salt,password_hash,password_date) values (?,?,?,?,NOW())";
+			$statement = $html5_db -> prepare($query);
+			$statement -> execute(array($pod+1000, $pod+1000, $salt, $hash));
+
+			$query="replace into guacamole_user_permission ( entity_id , affected_user_id , permission ) values ( ? , ? , 'UPDATE' )";
+			$statement = $html5_db -> prepare($query);
+			$statement -> execute(array($pod+1000, $pod+1000));
 	
 			$rc = updateUserToken($db,$username,$pod);
 		} else { 
@@ -120,7 +126,7 @@ function apiLogin($db, $html5_db, $p, $cookie) {
 	                $statement = $db -> prepare($query);
 	                $statement -> execute();
 
-                        $query = "delete from guacamole_user where username = '".$username."';";
+                        $query = "delete from guacamole_user where entity_id = (select entity_id from guacamole_entity where type='USER' and name = '".$username."')";
                         $statement = $html5_db -> prepare($query);
                         $statement -> execute();
 
